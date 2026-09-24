@@ -11,7 +11,7 @@ function buildPactCommand() {
   return new SlashCommandBuilder()
     .setName('pacte-setup')
     .setDescription('Prepare the Cerberus Pact ceremony in this channel.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.bitfield.toString())
     .setDMPermission(false);
 }
 

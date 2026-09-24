@@ -1,7 +1,6 @@
 const {
   Client,
   GatewayIntentBits,
-  Collection,
   REST,
   Routes,
   ModalBuilder,
@@ -19,7 +18,6 @@ const {
 const {
   ensureStore,
   hasPact,
-  getPact,
   savePact,
   resetPact,
 } = require('./pacts');
@@ -40,300 +38,600 @@ const client = new Client({
   ],
 });
 
-const commands = [buildPactCommand().toJSON()];
 
-async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+// ============================================================
+// READY
+// ============================================================
 
-  await rest.put(
-    Routes.applicationCommands(client.user.id),
-    { body: commands }
-  );
+client.once('clientReady', async () => {
+  console.log(`Cerberus online as ${client.user.tag}`);
 
-  console.log('Slash commands registered globally.');
-}
+  try {
+    const role = await client.guilds.cache
+      .first()
+      ?.roles.fetch(MEMBER_ROLE_ID);
 
-function makeNameModal() {
-  const input = new TextInputBuilder()
-    .setCustomId('declared_name')
-    .setLabel('Your Discord username')
-    .setPlaceholder('Speak your name...')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMinLength(1)
-    .setMaxLength(32);
+    if (role) {
+      console.log(`Oathbound role: ${role.id}`);
+    } else {
+      console.warn(`Oathbound role not found: ${MEMBER_ROLE_ID}`);
+    }
+  } catch (error) {
+    console.error('Unable to fetch Oathbound role:', error);
+  }
 
-  return new ModalBuilder()
-    .setCustomId('pact_name_modal')
-    .setTitle('Cerberus is listening...')
-    .addComponents(new ActionRowBuilder().addComponents(input));
-}
+  try {
+    const rest = new REST({ version: '10' })
+      .setToken(DISCORD_TOKEN);
 
-function nameMatchesDiscordUsername(input, username) {
-  return input.trim().toLowerCase() === username.trim().toLowerCase();
-}
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      {
+        body: [
+          buildPactCommand().toJSON(),
+        ],
+      }
+    );
 
-function errorEmbed(text) {
-  return new EmbedBuilder()
-    .setColor(0x330000)
-    .setTitle('THE ABYSS REMAINS SILENT')
-    .setDescription(text);
-}
+    console.log('Slash commands registered globally.');
+  } catch (error) {
+    console.error('Failed to register slash commands:', error);
+  }
+});
+
+
+// ============================================================
+// /pacte-setup
+// ============================================================
 
 async function handleSetup(interaction) {
   if (!interaction.memberPermissions?.has('ManageGuild')) {
     return interaction.reply({
-      content: 'Only members with Manage Server can prepare the ceremony.',
+      content: 'You do not have permission to prepare the Pact.',
       ephemeral: true,
     });
   }
 
-  const role = await interaction.guild.roles.fetch(MEMBER_ROLE_ID);
+  try {
+    const guild = interaction.guild;
 
-  if (!role) {
-    return interaction.reply({
-      content: `The configured Oathbound role (${MEMBER_ROLE_ID}) could not be found in this server.`,
+    const role = await guild.roles.fetch(MEMBER_ROLE_ID);
+
+    if (!role) {
+      return interaction.reply({
+        content:
+          `The Oathbound role could not be found.\nRole ID: ${MEMBER_ROLE_ID}`,
+        ephemeral: true,
+      });
+    }
+
+    const botMember = await guild.members.fetchMe();
+
+    if (botMember.roles.highest.position <= role.position) {
+      return interaction.reply({
+        content:
+          'Cerberus cannot assign the Oathbound role because its highest role must be above Oathbound in the role hierarchy.',
+        ephemeral: true,
+      });
+    }
+
+    // ========================================================
+    // GIF — envoyé comme premier message
+    // ========================================================
+
+    const gif =
+      'https://cdn.discordapp.com/attachments/1498501932568940586/1552517277415637022/standard.gif?ex=6ab5e5e3&is=6ab49463&hm=7e1f5253ed29189bde027bb326bad3131923de4322174e0c2e92c21f0301c583&';
+
+    await interaction.channel.send({
+      content: gif,
+    });
+
+    // ========================================================
+    // THE PACT — envoyé juste après le GIF
+    // ========================================================
+
+    const pactMessage = buildThresholdMessage();
+
+    await interaction.channel.send({
+      embeds: [pactMessage.embed],
+      components: pactMessage.components,
+    });
+
+    // ========================================================
+    // CONFIRMATION
+    // ========================================================
+
+    await interaction.reply({
+      content: 'The Pact has been prepared.',
       ephemeral: true,
     });
+
+  } catch (error) {
+    console.error('Pact setup error:', error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'Unable to open the Pact.',
+        ephemeral: true,
+      });
+    }
   }
-
-  if (!interaction.guild.members.me.roles.highest.comparePositionTo(role) > 0) {
-    // Kept intentionally simple below; the explicit check is performed again
-    // using the resolved Role objects to produce a useful error.
-  }
-
-  if (interaction.guild.members.me.roles.highest.position <= role.position) {
-    return interaction.reply({
-      content: 'Cerberus cannot grant Oathbound because the bot role is not above the Oathbound role. Move the bot role above Oathbound in Server Settings → Roles.',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.channel.send(buildThresholdMessage());
-
-  return interaction.reply({
-    content: 'The threshold has been prepared in this channel.',
-    ephemeral: true,
-  });
 }
+
+// ============================================================
+// DECLARE YOUR NAME
+// ============================================================
 
 async function handleDeclare(interaction) {
-  const member = interaction.member;
-
-  if (hasPact(interaction.user.id)) {
+  if (hasPact(interaction.guildId, interaction.user.id)) {
     return interaction.reply({
-      embeds: [errorEmbed('Your name has already been sealed in the Abyss.')],
+      content:
+        'Your pact already exists. The Abyss has already acknowledged you.',
       ephemeral: true,
     });
   }
 
-  if (member.roles.cache.has(MEMBER_ROLE_ID)) {
-    return interaction.reply({
-      embeds: [errorEmbed('The Abyss already recognizes you. Your pact is already sealed.')],
-      ephemeral: true,
-    });
+  try {
+    const member = await interaction.guild.members.fetch(
+      interaction.user.id
+    );
+
+    if (member.roles.cache.has(MEMBER_ROLE_ID)) {
+      return interaction.reply({
+        content:
+          'You have already crossed the gates. You are already Oathbound.',
+        ephemeral: true,
+      });
+    }
+  } catch (error) {
+    console.error('Member fetch error:', error);
   }
 
-  await interaction.showModal(makeNameModal());
+  const modal = new ModalBuilder()
+    .setCustomId('pact_name_modal')
+    .setTitle('THE PACT');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('declared_name')
+    .setLabel('Speak your name, mortal.')
+    .setPlaceholder(interaction.user.username)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(32);
+
+  const row = new ActionRowBuilder()
+    .addComponents(nameInput);
+
+  modal.addComponents(row);
+
+  await interaction.showModal(modal);
 }
 
-async function handleNameModal(interaction) {
-  const declaredName = interaction.fields.getTextInputValue('declared_name').trim();
-  const discordUsername = interaction.user.username;
 
-  if (!nameMatchesDiscordUsername(declaredName, discordUsername)) {
+// ============================================================
+// NAME MODAL
+// ============================================================
+
+async function handleNameModal(interaction) {
+  const declaredName = interaction.fields
+    .getTextInputValue('declared_name')
+    .trim();
+
+  const realUsername = interaction.user.username;
+
+  if (
+    declaredName.toLowerCase() !==
+    realUsername.toLowerCase()
+  ) {
     return interaction.reply({
       embeds: [
-        errorEmbed([
-          'Cerberus does not recognize that name.',
-          '',
-          'Speak the exact username of the Discord account standing before the gate.',
-        ].join('\n')),
+        new EmbedBuilder()
+          .setColor(0x550000)
+          .setTitle('NAME REJECTED')
+          .setDescription([
+            'That is not the name by which you entered this realm.',
+            '',
+            'Cerberus does not accept false names.',
+            '',
+            '**Speak your Discord username exactly.**',
+          ].join('\n')),
       ],
       ephemeral: true,
     });
   }
 
-  if (hasPact(interaction.user.id)) {
-    return interaction.reply({
-      embeds: [errorEmbed('Your name has already been sealed in the Abyss.')],
-      ephemeral: true,
-    });
-  }
-
-  const acknowledged = new EmbedBuilder()
-    .setColor(0x220000)
-    .setTitle('Name recognized.')
-    .setDescription([
-      `**${discordUsername}**`,
-      '',
-      'The Abyss has acknowledged you.',
-    ].join('\n'));
-
   await interaction.reply({
-    embeds: [acknowledged, buildPactMessage(discordUsername).embeds[0]],
-    components: buildPactMessage(discordUsername).components,
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x330000)
+        .setTitle('NAME RECOGNIZED')
+        .setDescription([
+          `**${realUsername}**`,
+          '',
+          'The Abyss has acknowledged your name.',
+          '',
+          'Now comes the pact.',
+        ].join('\n')),
+    ],
+    ephemeral: true,
+  });
+
+  await interaction.followUp({
+    ...buildPactMessage(realUsername),
     ephemeral: true,
   });
 }
 
+
+// ============================================================
+// SEAL THE PACT
+// ============================================================
+
 async function handleSeal(interaction) {
-  if (hasPact(interaction.user.id)) {
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const username = interaction.user.username;
+
+  if (hasPact(guildId, userId)) {
     return interaction.reply({
-      embeds: [errorEmbed('This pact has already been sealed.')],
+      content:
+        'The pact has already been sealed. There is no turning back.',
       ephemeral: true,
     });
-  }
-
-  const role = await interaction.guild.roles.fetch(MEMBER_ROLE_ID);
-
-  if (!role) {
-    return interaction.reply({
-      embeds: [errorEmbed('The Oathbound role could not be found. The ceremony cannot continue.')],
-      ephemeral: true,
-    });
-  }
-
-  const me = interaction.guild.members.me;
-
-  if (!me || me.roles.highest.position <= role.position) {
-    return interaction.reply({
-      embeds: [errorEmbed('Cerberus cannot complete the transformation. The Oathbound role must be below the bot’s highest role.')],
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferUpdate();
-
-  const progressMessages = [
-    'PACT INITIATED...\n\n████░░░░░░░░░░░░ 25%\n\nThe contract is being written...',
-    'PACT INITIATED...\n\n████████░░░░░░░░ 52%\n\nThe Abyss is reading your name...',
-    'PACT INITIATED...\n\n████████████░░░░ 78%\n\nThe gates are beginning to open...',
-    'PACT INITIATED...\n\n████████████████ 100%\n\nThe contract is complete.',
-  ];
-
-  for (const content of progressMessages) {
-    await interaction.editReply({
-      content,
-      embeds: [],
-      components: [],
-    });
-    await new Promise(resolve => setTimeout(resolve, 850));
   }
 
   try {
-    await interaction.member.roles.add(role, 'Kingdom of Hell — Pact sealed');
-  } catch (error) {
-    console.error('Failed to grant Oathbound:', error);
+    const guild = interaction.guild;
 
-    return interaction.editReply({
-      content: '',
-      embeds: [errorEmbed('The contract was written, but the transformation could not be completed. Check the bot role hierarchy and Manage Roles permission.')],
+    const member = await guild.members.fetch(userId);
+    const role = await guild.roles.fetch(MEMBER_ROLE_ID);
+
+    if (!role) {
+      return interaction.reply({
+        content:
+          `The Oathbound role could not be found.\nRole ID: ${MEMBER_ROLE_ID}`,
+        ephemeral: true,
+      });
+    }
+
+    const botMember = await guild.members.fetchMe();
+
+    if (botMember.roles.highest.position <= role.position) {
+      return interaction.reply({
+        content:
+          'Cerberus cannot complete the transformation because the Oathbound role is above the bot role.',
+        ephemeral: true,
+      });
+    }
+
+    await interaction.deferUpdate();
+
+    // --------------------------------------------------------
+    // PACT INITIATED
+    // --------------------------------------------------------
+
+    const progressEmbed = new EmbedBuilder()
+      .setColor(0x330000)
+      .setTitle('PACT INITIATED...')
+      .setDescription([
+        'The contract is being written...',
+        '',
+        '░░░░░░░░░░░░░░░░░░░░',
+      ].join('\n'));
+
+    await interaction.editReply({
+      embeds: [progressEmbed],
       components: [],
     });
+
+    await new Promise(resolve => setTimeout(resolve, 850));
+
+    // --------------------------------------------------------
+    // 25%
+    // --------------------------------------------------------
+
+    progressEmbed.setDescription([
+      'The contract is being written...',
+      '',
+      '█████░░░░░░░░░░░░░░░ 25%',
+    ].join('\n'));
+
+    await interaction.editReply({
+      embeds: [progressEmbed],
+      components: [],
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 850));
+
+    // --------------------------------------------------------
+    // 52%
+    // --------------------------------------------------------
+
+    progressEmbed.setDescription([
+      'The contract is being written...',
+      '',
+      '██████████░░░░░░░░░░ 52%',
+    ].join('\n'));
+
+    await interaction.editReply({
+      embeds: [progressEmbed],
+      components: [],
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 850));
+
+    // --------------------------------------------------------
+    // 78%
+    // --------------------------------------------------------
+
+    progressEmbed.setDescription([
+      'The contract is being written...',
+      '',
+      '███████████████░░░░░ 78%',
+    ].join('\n'));
+
+    await interaction.editReply({
+      embeds: [progressEmbed],
+      components: [],
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 850));
+
+    // --------------------------------------------------------
+    // 100%
+    // --------------------------------------------------------
+
+    progressEmbed.setDescription([
+      'The contract is being written...',
+      '',
+      '████████████████████ 100%',
+    ].join('\n'));
+
+    await interaction.editReply({
+      embeds: [progressEmbed],
+      components: [],
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 700));
+
+    // --------------------------------------------------------
+    // GIVE OATHBOUND ROLE
+    // --------------------------------------------------------
+
+    if (!member.roles.cache.has(MEMBER_ROLE_ID)) {
+      await member.roles.add(
+        role,
+        'Cerberus Pact sealed'
+      );
+    }
+
+    // --------------------------------------------------------
+    // SAVE PACT
+    // --------------------------------------------------------
+
+    savePact(guildId, userId, {
+      username,
+      declaredAt: new Date().toISOString(),
+    });
+
+    // --------------------------------------------------------
+    // FINAL MESSAGE
+    // --------------------------------------------------------
+
+    await interaction.editReply({
+      ...buildSealedMessage(username),
+    });
+
+    console.log(
+      `[PACT SEALED] ${username} (${userId}) -> Oathbound`
+    );
+
+  } catch (error) {
+    console.error('Pact sealing error:', error);
+
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x550000)
+              .setTitle('THE RITUAL FAILED')
+              .setDescription([
+                'Cerberus could not complete the transformation.',
+                '',
+                'The gates remain closed.',
+                '',
+                'An administrator should inspect the bot logs.',
+              ].join('\n')),
+          ],
+          components: [],
+        });
+      } else {
+        await interaction.reply({
+          content:
+            'Cerberus could not complete the pact.',
+          ephemeral: true,
+        });
+      }
+    } catch (replyError) {
+      console.error(
+        'Failed to send pact error message:',
+        replyError
+      );
+    }
   }
-
-  savePact(interaction.user.id, {
-    userId: interaction.user.id,
-    username: interaction.user.username,
-    declaredName: interaction.user.username,
-    guildId: interaction.guildId,
-    roleId: MEMBER_ROLE_ID,
-    sealedAt: new Date().toISOString(),
-  });
-
-  return interaction.editReply({
-    content: '',
-    ...buildSealedMessage(interaction.user.username),
-  });
 }
 
+
+// ============================================================
+// LEAVE
+// ============================================================
+
 async function handleLeave(interaction) {
-  return interaction.update({
-    content: '',
+  await interaction.update({
     embeds: [
       new EmbedBuilder()
         .setColor(0x111111)
         .setTitle('THE GATE REMAINS CLOSED')
         .setDescription([
-          'You have chosen not to enter.',
+          'You have chosen not to seal the pact.',
           '',
           'The Abyss will remember nothing.',
+          '',
+          'If you return...',
+          '',
+          'Cerberus will be waiting.',
         ].join('\n')),
     ],
     components: [],
   });
 }
 
-client.once('ready', async () => {
-  console.log(`Cerberus online as ${client.user.tag}`);
-  console.log(`Oathbound role: ${MEMBER_ROLE_ID}`);
 
-  try {
-    await registerCommands();
-  } catch (error) {
-    console.error('Command registration failed:', error);
-  }
-});
+// ============================================================
+// INTERACTIONS
+// ============================================================
 
-client.on('interactionCreate', async interaction => {
+client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'pacte-setup') {
-      return await handleSetup(interaction);
+
+    // Slash command
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'pacte-setup') {
+        await handleSetup(interaction);
+      }
+
+      return;
     }
 
+    // Button
     if (interaction.isButton()) {
-      if (interaction.customId === 'pact_declare') return await handleDeclare(interaction);
-      if (interaction.customId === 'pact_seal') return await handleSeal(interaction);
-      if (interaction.customId === 'pact_leave') return await handleLeave(interaction);
+
+      if (interaction.customId === 'pact_declare') {
+        await handleDeclare(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'pact_seal') {
+        await handleSeal(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'pact_leave') {
+        await handleLeave(interaction);
+        return;
+      }
+
+      return;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'pact_name_modal') {
-      return await handleNameModal(interaction);
+    // Modal
+    if (interaction.isModalSubmit()) {
+
+      if (interaction.customId === 'pact_name_modal') {
+        await handleNameModal(interaction);
+        return;
+      }
+
+      return;
     }
+
   } catch (error) {
     console.error('Interaction error:', error);
 
-    const response = {
-      content: 'The Abyss encountered an error while processing the pact.',
-      ephemeral: true,
-    };
-
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(response).catch(() => {});
-    } else {
-      await interaction.reply(response).catch(() => {});
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({
+          content:
+            'Cerberus encountered an unexpected error.',
+          ephemeral: true,
+        });
+      } else {
+        await interaction.reply({
+          content:
+            'Cerberus encountered an unexpected error.',
+          ephemeral: true,
+        });
+      }
+    } catch (replyError) {
+      console.error(
+        'Unable to send interaction error:',
+        replyError
+      );
     }
   }
 });
 
-client.on('guildMemberRemove', member => {
-  const wasReset = resetPact(member.id);
 
-  if (wasReset) {
-    console.log(`Pact reset for ${member.user.tag} (${member.id}) — member left the guild.`);
+// ============================================================
+// MEMBER LEAVES SERVER
+// ============================================================
+
+client.on('guildMemberRemove', (member) => {
+  try {
+    resetPact(member.guild.id, member.id);
+
+    console.log(
+      `[PACT RESET] ${member.user.username} left the server.`
+    );
+  } catch (error) {
+    console.error(
+      'Failed to reset pact after member removal:',
+      error
+    );
   }
 });
 
-client.on('guildMemberUpdate', (oldMember, newMember) => {
-  const hadRole = oldMember.roles.cache.has(MEMBER_ROLE_ID);
-  const stillHasRole = newMember.roles.cache.has(MEMBER_ROLE_ID);
 
-  if (hadRole && !stillHasRole) {
-    const wasReset = resetPact(newMember.id);
+// ============================================================
+// OATHBOUND ROLE REMOVED
+// ============================================================
 
-    if (wasReset) {
-      console.log(`Pact reset for ${newMember.user.tag} (${newMember.id}) — Oathbound role removed.`);
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  try {
+    const hadRole = oldMember.roles.cache.has(MEMBER_ROLE_ID);
+    const hasRole = newMember.roles.cache.has(MEMBER_ROLE_ID);
+
+    // Role was removed manually
+    if (hadRole && !hasRole) {
+      resetPact(
+        newMember.guild.id,
+        newMember.id
+      );
+
+      console.log(
+        `[PACT RESET] Oathbound role removed from ${newMember.user.username}.`
+      );
     }
+
+  } catch (error) {
+    console.error(
+      'Failed to reset pact after role removal:',
+      error
+    );
   }
 });
 
-client.on('error', error => {
+
+// ============================================================
+// ERRORS
+// ============================================================
+
+client.on('error', (error) => {
   console.error('Discord client error:', error);
 });
 
-process.on('unhandledRejection', error => {
+process.on('unhandledRejection', (error) => {
   console.error('Unhandled promise rejection:', error);
 });
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+
+// ============================================================
+// LOGIN
+// ============================================================
 
 client.login(DISCORD_TOKEN);
