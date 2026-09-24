@@ -11,31 +11,26 @@ function buildPactCommand() {
   return new SlashCommandBuilder()
     .setName('pacte-setup')
     .setDescription('Prepare the Cerberus Pact ceremony in this channel.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.bitfield.toString())
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
     .setDMPermission(false);
 }
 
 function buildThresholdMessage() {
   const embed = new EmbedBuilder()
-    .setColor(0x111111)
-    .setTitle('THE THRESHOLD')
+    .setColor(0x220000)
+    .setTitle('THE PACT')
     .setDescription([
-      'Don’t move.',
+      'You have crossed the threshold.',
       '',
-      'Not everyone who arrives here… is allowed in.',
+      'Few do.',
       '',
-      '...',
+      'Before the gates open,',
+      'the Abyss requires one thing.',
       '',
-      'One move.',
+      'To seal the Pact,',
+      'you must leave your signature.',
       '',
-      '→ 🤝┃pacte',
-      '',
-      'You already know where to look.',
-      '',
-      'Make it. Or remain… unseen.',
-      '',
-      '— Cerberus',
-      '*Gatekeeper of the Abyss*',
+      'Write your name.',
     ].join('\n'));
 
   const row = new ActionRowBuilder().addComponents(
@@ -46,7 +41,10 @@ function buildThresholdMessage() {
       .setEmoji('✍️')
   );
 
-  return { embeds: [embed], components: [row] };
+  return {
+    embed,
+    components: [row],
+  };
 }
 
 function buildPactMessage(username) {
@@ -70,7 +68,9 @@ function buildPactMessage(username) {
       '',
       'Do you seal the pact?',
     ].join('\n'))
-    .setFooter({ text: `Name declared: ${username}` });
+    .setFooter({
+      text: `Name declared: ${username}`,
+    });
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -78,6 +78,7 @@ function buildPactMessage(username) {
       .setLabel('SEAL THE PACT')
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🔥'),
+
     new ButtonBuilder()
       .setCustomId('pact_leave')
       .setLabel('LEAVE')
@@ -85,7 +86,10 @@ function buildPactMessage(username) {
       .setEmoji('✖️')
   );
 
-  return { embeds: [embed], components: [row] };
+  return {
+    embeds: [embed],
+    components: [row],
+  };
 }
 
 function buildSealedMessage(username) {
@@ -101,9 +105,14 @@ function buildSealedMessage(username) {
       '',
       '**Welcome, Demon.**',
     ].join('\n'))
-    .setFooter({ text: username });
+    .setFooter({
+      text: username,
+    });
 
-  return { embeds: [embed], components: [] };
+  return {
+    embeds: [embed],
+    components: [],
+  };
 }
 
 module.exports = {
