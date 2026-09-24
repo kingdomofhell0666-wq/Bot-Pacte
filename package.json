@@ -1,0 +1,17 @@
+{
+  "name": "kingdom-of-hell-pacte",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cerberus Pact ceremony bot for Kingdom of Hell.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.2"
+  }
+}
